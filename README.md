@@ -2,13 +2,19 @@
 
 一个基于 Node.js (>=18) 的轻量代理，用于拦截指定端口和 URL 的请求，先请求 Mockoon CLI 接口，再把返回内容按“换行”分段，以流式方式返回给客户端（SSE 风格）。
 
+## 现在支持什么？
+
+- ✅ 支持拦截**多个接口路径**（`interceptPaths` 数组）
+- ✅ 不在拦截列表中的接口会**直接透传**到上游 Mockoon CLI（不做 SSE 拆行改写）
+
 ## 背景
 
-Mockoon CLI 不支持模拟流式响应。本工具实现：
+Mockoon CLI 在某些场景下会返回非标准流式文本块（例如以多行 `data: ...` 形式返回），但你的客户端需要真正边收边处理。本工具实现：
 
-1. 拦截指定端口 + 指定路径。
-2. 将请求原样转发到指定 Mockoon CLI 服务器接口。
-3. 读取上游返回后按换行拆分，逐段写回下游，形成流式响应。
+1. 拦截指定端口 + 指定路径列表。
+2. 将请求转发到指定 Mockoon CLI 服务器接口。
+3. 对“命中拦截列表”的接口：按换行拆分后流式返回。
+4. 对“未命中拦截列表”的接口：原样透传返回。
 
 ## 环境要求
 
@@ -21,18 +27,22 @@ Mockoon CLI 不支持模拟流式响应。本工具实现：
 ```json
 {
   "listenPort": 8080,
-  "interceptPath": "/v1/chat/completions",
   "targetBaseUrl": "http://127.0.0.1:3000",
-  "requestTimeoutMs": 120000
+  "requestTimeoutMs": 120000,
+  "interceptPaths": [
+    "/v1/chat/completions"
+  ]
 }
 ```
 
 字段说明：
 
 - `listenPort`：本代理监听端口
-- `interceptPath`：要拦截的 URL 路径
 - `targetBaseUrl`：Mockoon CLI 服务地址（协议+主机+端口）
 - `requestTimeoutMs`：上游请求超时毫秒数
+- `interceptPaths`：需要做流式改写的路径数组（可多个）
+
+> 兼容旧字段：若你已有 `interceptPath`（单个字符串），程序也会自动兼容。
 
 ## 启动方式
 
@@ -42,9 +52,12 @@ npm start
 
 ## 请求链路示意
 
-客户端 -> 本代理(`listenPort` + `interceptPath`) -> Mockoon CLI(`targetBaseUrl` + 原始 path/query)
+客户端 -> 本代理(`listenPort`) -> Mockoon CLI(`targetBaseUrl` + 原始 path/query)
 
-## 流式处理逻辑
+- path 在 `interceptPaths`：返回 SSE 风格流式
+- path 不在 `interceptPaths`：原样透传
+
+## 流式处理逻辑（仅拦截路径生效）
 
 上游返回示例：
 
@@ -90,35 +103,9 @@ data: [DONE]
    npm start
    ```
 
-### 方案 B：做成 systemd 服务（Linux）
-
-创建 `/etc/systemd/system/mockoon-cli-proxy.service`：
-
-```ini
-[Unit]
-Description=Mockoon CLI Streaming Proxy
-After=network.target
-
-[Service]
-Type=simple
-WorkingDirectory=/opt/mockoon-cli-proxy
-ExecStart=/usr/bin/node /opt/mockoon-cli-proxy/src/index.js
-Restart=always
-RestartSec=3
-
-[Install]
-WantedBy=multi-user.target
-```
-
-然后执行：
-
-```bash
-sudo systemctl daemon-reload
-sudo systemctl enable --now mockoon-cli-proxy
-sudo systemctl status mockoon-cli-proxy
-```
-
 ## 验证
+
+### 1) 命中拦截路径（流式改写）
 
 ```bash
 curl -N -X POST "http://127.0.0.1:8080/v1/chat/completions" \
@@ -126,5 +113,9 @@ curl -N -X POST "http://127.0.0.1:8080/v1/chat/completions" \
   -d '{"messages":[{"role":"user","content":"hi"}]}'
 ```
 
-使用 `-N` 可关闭 curl 缓冲，便于观察流式输出。
+### 2) 未命中拦截路径（透传）
+
+```bash
+curl -i "http://127.0.0.1:8080/health"
+```
 

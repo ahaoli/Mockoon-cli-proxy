@@ -18,11 +18,17 @@ function loadConfig() {
     throw new Error('config.targetBaseUrl is required');
   }
 
+  const interceptPaths = Array.isArray(config.interceptPaths)
+    ? config.interceptPaths.filter((p) => typeof p === 'string' && p.trim())
+    : config.interceptPath
+      ? [config.interceptPath]
+      : ['/v1/chat/completions'];
+
   return {
     listenPort: Number(config.listenPort || 8080),
-    interceptPath: config.interceptPath || '/v1/chat/completions',
     targetBaseUrl: config.targetBaseUrl,
-    requestTimeoutMs: Number(config.requestTimeoutMs || 120000)
+    requestTimeoutMs: Number(config.requestTimeoutMs || 120000),
+    interceptPaths
   };
 }
 
@@ -43,7 +49,7 @@ function writeSseLine(res, line) {
   res.write(`${trimmed}\n\n`);
 }
 
-function proxyStreamingRequest(req, res) {
+function pipeRequestToUpstream(req, res, { forceSse }) {
   const bodyChunks = [];
 
   req.on('data', (chunk) => bodyChunks.push(chunk));
@@ -75,17 +81,26 @@ function proxyStreamingRequest(req, res) {
 
     const transport = targetUrl.protocol === 'https:' ? https : http;
     const upstreamReq = transport.request(requestOptions, (upstreamRes) => {
-      res.writeHead(upstreamRes.statusCode || 200, {
-        'content-type': 'text/event-stream; charset=utf-8',
-        'cache-control': 'no-cache, no-transform',
-        connection: 'keep-alive',
-        'x-accel-buffering': 'no'
-      });
+      if (forceSse) {
+        res.writeHead(upstreamRes.statusCode || 200, {
+          'content-type': 'text/event-stream; charset=utf-8',
+          'cache-control': 'no-cache, no-transform',
+          connection: 'keep-alive',
+          'x-accel-buffering': 'no'
+        });
+      } else {
+        res.writeHead(upstreamRes.statusCode || 200, copyHeaders(upstreamRes.headers));
+      }
 
       let buffer = '';
       upstreamRes.setEncoding('utf8');
 
       upstreamRes.on('data', (chunk) => {
+        if (!forceSse) {
+          res.write(chunk);
+          return;
+        }
+
         buffer += chunk;
         const lines = buffer.split(/\r?\n/);
         buffer = lines.pop() || '';
@@ -96,7 +111,7 @@ function proxyStreamingRequest(req, res) {
       });
 
       upstreamRes.on('end', () => {
-        if (buffer.trim()) {
+        if (forceSse && buffer.trim()) {
           writeSseLine(res, buffer);
         }
         res.end();
@@ -131,28 +146,17 @@ function proxyStreamingRequest(req, res) {
   });
 }
 
-function passthrough(req, res) {
-  res.writeHead(404, { 'content-type': 'application/json; charset=utf-8' });
-  res.end(
-    JSON.stringify({
-      error: 'Not intercepted',
-      hint: `Only ${config.interceptPath} is intercepted. Configure interceptPath in config.json if needed.`
-    })
-  );
-}
-
 const server = http.createServer((req, res) => {
   const reqPath = new URL(req.url, `http://${req.headers.host || 'localhost'}`).pathname;
-  if (reqPath === config.interceptPath) {
-    proxyStreamingRequest(req, res);
-    return;
-  }
-  passthrough(req, res);
+  const shouldIntercept = config.interceptPaths.includes(reqPath);
+
+  pipeRequestToUpstream(req, res, { forceSse: shouldIntercept });
 });
 
 server.listen(config.listenPort, () => {
   console.log(`[mockoon-cli-proxy] listening on port ${config.listenPort}`);
-  console.log(`[mockoon-cli-proxy] intercept path: ${config.interceptPath}`);
+  console.log(`[mockoon-cli-proxy] intercept paths: ${config.interceptPaths.join(', ')}`);
   console.log(`[mockoon-cli-proxy] target base url: ${config.targetBaseUrl}`);
+  console.log(`[mockoon-cli-proxy] non-intercept paths: passthrough`);
   console.log(`[mockoon-cli-proxy] config file: ${CONFIG_PATH}`);
 });

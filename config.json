@@ -1,6 +1,8 @@
 {
   "listenPort": 8080,
-  "interceptPath": "/v1/chat/completions",
   "targetBaseUrl": "http://127.0.0.1:3000",
-  "requestTimeoutMs": 120000
+  "requestTimeoutMs": 120000,
+  "interceptPaths": [
+    "/v1/chat/completions"
+  ]
 }
