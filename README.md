@@ -1,20 +1,11 @@
 # Mockoon CLI Streaming Proxy
 
-一个基于 Node.js (>=18) 的轻量代理，用于拦截指定端口和 URL 的请求，先请求 Mockoon CLI 接口，再把返回内容按“换行”分段，以流式方式返回给客户端（SSE 风格）。
+一个基于 Node.js (>=18) 的轻量代理，用于拦截指定端口和 URL 的请求，为 Mockoon CLI 提供流式响应能力。
 
-## 现在支持什么？
+## 支持什么？
 
 - ✅ 支持拦截**多个接口路径**（`interceptPaths` 数组）
 - ✅ 不在拦截列表中的接口会**直接透传**到上游 Mockoon CLI（不做 SSE 拆行改写）
-
-## 背景
-
-Mockoon CLI 在某些场景下会返回非标准流式文本块（例如以多行 `data: ...` 形式返回），但你的客户端需要真正边收边处理。本工具实现：
-
-1. 拦截指定端口 + 指定路径列表。
-2. 将请求转发到指定 Mockoon CLI 服务器接口。
-3. 对“命中拦截列表”的接口：按换行拆分后流式返回。
-4. 对“未命中拦截列表”的接口：原样透传返回。
 
 ## 环境要求
 
@@ -103,19 +94,4 @@ data: [DONE]
    npm start
    ```
 
-## 验证
-
-### 1) 命中拦截路径（流式改写）
-
-```bash
-curl -N -X POST "http://127.0.0.1:8080/v1/chat/completions" \
-  -H "Content-Type: application/json" \
-  -d '{"messages":[{"role":"user","content":"hi"}]}'
-```
-
-### 2) 未命中拦截路径（透传）
-
-```bash
-curl -i "http://127.0.0.1:8080/health"
-```
 
