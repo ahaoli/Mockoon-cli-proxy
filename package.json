@@ -1,0 +1,14 @@
+{
+  "name": "mockoon-cli-proxy",
+  "version": "1.0.0",
+  "description": "Proxy Mockoon CLI responses as streaming SSE-like chunks",
+  "main": "src/index.js",
+  "type": "commonjs",
+  "engines": {
+    "node": ">=18"
+  },
+  "scripts": {
+    "start": "node src/index.js",
+    "test": "node --check src/index.js"
+  }
+}
