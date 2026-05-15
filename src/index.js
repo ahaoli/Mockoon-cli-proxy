@@ -4,7 +4,23 @@ const http = require('http');
 const https = require('https');
 const { URL } = require('url');
 
-const CONFIG_PATH = path.resolve(process.cwd(), 'config.json');
+const PROJECT_ROOT = path.resolve(__dirname, '..');
+const CONFIG_PATH = process.env.PROXY_CONFIG_PATH
+  ? path.resolve(process.env.PROXY_CONFIG_PATH)
+  : path.join(PROJECT_ROOT, 'config.json');
+
+function normalizePath(value) {
+  if (typeof value !== 'string') return null;
+  const trimmed = value.trim();
+  if (!trimmed) return null;
+  return trimmed.startsWith('/') ? trimmed : `/${trimmed}`;
+}
+
+function normalizePathList(paths) {
+  return Array.from(new Set((Array.isArray(paths) ? paths : [])
+    .map(normalizePath)
+    .filter(Boolean)));
+}
 
 function loadConfig() {
   if (!fs.existsSync(CONFIG_PATH)) {
@@ -14,26 +30,46 @@ function loadConfig() {
   const raw = fs.readFileSync(CONFIG_PATH, 'utf8');
   const config = JSON.parse(raw);
 
-  if (!config.targetBaseUrl) {
-    throw new Error('config.targetBaseUrl is required');
-  }
-
-  const interceptPaths = Array.isArray(config.interceptPaths)
-    ? config.interceptPaths.filter((p) => typeof p === 'string' && p.trim())
+  const legacyInterceptPaths = Array.isArray(config.interceptPaths)
+    ? config.interceptPaths
     : config.interceptPath
       ? [config.interceptPath]
       : ['/v1/chat/completions'];
 
+  const routes = Array.isArray(config.routes)
+    ? config.routes
+      .filter((item) => item && typeof item === 'object' && item.targetBaseUrl)
+      .map((item) => ({
+        targetBaseUrl: String(item.targetBaseUrl),
+        matchPaths: normalizePathList(item.matchPaths),
+        interceptPaths: normalizePathList(item.interceptPaths)
+      }))
+    : [];
+
+  if (!routes.length) {
+    if (!config.targetBaseUrl) {
+      throw new Error('config.targetBaseUrl is required when config.routes is not set');
+    }
+
+    routes.push({
+      targetBaseUrl: String(config.targetBaseUrl),
+      matchPaths: ['/'],
+      interceptPaths: normalizePathList(legacyInterceptPaths)
+    });
+  }
+
+  const defaultRoute = routes.find((route) => route.matchPaths.includes('/')) || routes[0];
+
   return {
     listenPort: Number(config.listenPort || 8080),
-    targetBaseUrl: config.targetBaseUrl,
     requestTimeoutMs: Number(config.requestTimeoutMs || 120000),
-    interceptPaths
+    streamDelayMs: Number(config.streamDelayMs || 0),
+    routes,
+    defaultRoute
   };
 }
 
 const config = loadConfig();
-const targetBase = new URL(config.targetBaseUrl);
 
 function copyHeaders(sourceHeaders = {}) {
   const headers = {};
@@ -49,7 +85,23 @@ function writeSseLine(res, line) {
   res.write(`${trimmed}\n\n`);
 }
 
-function pipeRequestToUpstream(req, res, { forceSse }) {
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function pickRoute(reqPath) {
+  const matchedRoutes = config.routes
+    .filter((route) => route.matchPaths.some((prefix) => reqPath.startsWith(prefix)))
+    .sort((a, b) => {
+      const aLongest = Math.max(...a.matchPaths.map((prefix) => prefix.length));
+      const bLongest = Math.max(...b.matchPaths.map((prefix) => prefix.length));
+      return bLongest - aLongest;
+    });
+
+  return matchedRoutes[0] || config.defaultRoute;
+}
+
+function pipeRequestToUpstream(req, res, { forceSse, route }) {
   const bodyChunks = [];
 
   req.on('data', (chunk) => bodyChunks.push(chunk));
@@ -63,6 +115,7 @@ function pipeRequestToUpstream(req, res, { forceSse }) {
 
   req.on('end', () => {
     const body = Buffer.concat(bodyChunks);
+    const targetBase = new URL(route.targetBaseUrl);
     const targetUrl = new URL(req.url, targetBase);
 
     const headers = copyHeaders(req.headers);
@@ -82,12 +135,14 @@ function pipeRequestToUpstream(req, res, { forceSse }) {
     const transport = targetUrl.protocol === 'https:' ? https : http;
     const upstreamReq = transport.request(requestOptions, (upstreamRes) => {
       if (forceSse) {
+        res.socket?.setNoDelay(true);
         res.writeHead(upstreamRes.statusCode || 200, {
           'content-type': 'text/event-stream; charset=utf-8',
           'cache-control': 'no-cache, no-transform',
           connection: 'keep-alive',
           'x-accel-buffering': 'no'
         });
+        res.flushHeaders();
       } else {
         res.writeHead(upstreamRes.statusCode || 200, copyHeaders(upstreamRes.headers));
       }
@@ -102,17 +157,20 @@ function pipeRequestToUpstream(req, res, { forceSse }) {
         }
 
         buffer += chunk;
-        const lines = buffer.split(/\r?\n/);
-        buffer = lines.pop() || '';
-
-        for (const line of lines) {
-          writeSseLine(res, line);
-        }
       });
 
-      upstreamRes.on('end', () => {
-        if (forceSse && buffer.trim()) {
-          writeSseLine(res, buffer);
+      upstreamRes.on('end', async () => {
+        if (!forceSse) {
+          res.end();
+          return;
+        }
+
+        const lines = buffer.split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
+        for (const line of lines) {
+          writeSseLine(res, line);
+          if (config.streamDelayMs > 0) {
+            await sleep(config.streamDelayMs);
+          }
         }
         res.end();
       });
@@ -148,15 +206,20 @@ function pipeRequestToUpstream(req, res, { forceSse }) {
 
 const server = http.createServer((req, res) => {
   const reqPath = new URL(req.url, `http://${req.headers.host || 'localhost'}`).pathname;
-  const shouldIntercept = config.interceptPaths.includes(reqPath);
+  const route = pickRoute(reqPath);
+  const shouldIntercept = route.interceptPaths.includes(reqPath);
 
-  pipeRequestToUpstream(req, res, { forceSse: shouldIntercept });
+  pipeRequestToUpstream(req, res, { forceSse: shouldIntercept, route });
 });
 
 server.listen(config.listenPort, () => {
   console.log(`[mockoon-cli-proxy] listening on port ${config.listenPort}`);
-  console.log(`[mockoon-cli-proxy] intercept paths: ${config.interceptPaths.join(', ')}`);
-  console.log(`[mockoon-cli-proxy] target base url: ${config.targetBaseUrl}`);
-  console.log(`[mockoon-cli-proxy] non-intercept paths: passthrough`);
+  console.log(`[mockoon-cli-proxy] request timeout ms: ${config.requestTimeoutMs}`);
+  console.log(`[mockoon-cli-proxy] stream delay ms: ${config.streamDelayMs}`);
+  for (const route of config.routes) {
+    console.log(`[mockoon-cli-proxy] route target: ${route.targetBaseUrl}`);
+    console.log(`[mockoon-cli-proxy]   match paths: ${route.matchPaths.join(', ')}`);
+    console.log(`[mockoon-cli-proxy]   intercept paths: ${route.interceptPaths.join(', ') || '(none)'}`);
+  }
   console.log(`[mockoon-cli-proxy] config file: ${CONFIG_PATH}`);
 });

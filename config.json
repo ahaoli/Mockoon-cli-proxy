@@ -1,8 +1,22 @@
 {
   "listenPort": 8080,
-  "targetBaseUrl": "http://127.0.0.1:3000",
   "requestTimeoutMs": 120000,
-  "interceptPaths": [
-    "/v1/chat/completions"
+  "streamDelayMs": 120,
+  "routes": [
+    {
+      "targetBaseUrl": "http://127.0.0.1:3000",
+      "matchPaths": ["/v1"],
+      "interceptPaths": ["/v1/chat/completions"]
+    },
+    {
+      "targetBaseUrl": "http://127.0.0.1:4000",
+      "matchPaths": ["/api"],
+      "interceptPaths": []
+    },
+    {
+      "targetBaseUrl": "http://127.0.0.1:3000",
+      "matchPaths": ["/"],
+      "interceptPaths": []
+    }
   ]
 }

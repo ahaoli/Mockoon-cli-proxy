@@ -1,11 +1,14 @@
 # Mockoon CLI Streaming Proxy
 
-一个基于 Node.js (>=18) 的轻量代理，用于拦截指定端口和 URL 的请求，为 Mockoon CLI 提供流式响应能力。
+一个基于 Node.js (>=18) 的轻量代理，用于将请求转发到一个或多个 Mockoon（或其他上游）服务，并可对指定接口做 SSE 风格流式输出。
 
 ## 支持什么？
 
-- ✅ 支持拦截**多个接口路径**（`interceptPaths` 数组）
-- ✅ 不在拦截列表中的接口会**直接透传**到上游 Mockoon CLI（不做 SSE 拆行改写）
+- ✅ 支持配置**多个 targetBaseUrl**（`routes`）
+- ✅ 支持按路径前缀把请求路由到不同上游
+- ✅ 支持为拦截路径输出 SSE 风格响应
+- ✅ 支持配置流式输出的模拟延迟（`streamDelayMs`）
+- ✅ 支持后台常驻运行并写日志（`npm run start:daemon`）
 
 ## 环境要求
 
@@ -18,80 +21,104 @@
 ```json
 {
   "listenPort": 8080,
-  "targetBaseUrl": "http://127.0.0.1:3000",
   "requestTimeoutMs": 120000,
-  "interceptPaths": [
-    "/v1/chat/completions"
+  "streamDelayMs": 120,
+  "routes": [
+    {
+      "targetBaseUrl": "http://127.0.0.1:3000",
+      "matchPaths": ["/v1"],
+      "interceptPaths": ["/v1/chat/completions"]
+    },
+    {
+      "targetBaseUrl": "http://127.0.0.1:4000",
+      "matchPaths": ["/api"],
+      "interceptPaths": []
+    },
+    {
+      "targetBaseUrl": "http://127.0.0.1:3000",
+      "matchPaths": ["/"],
+      "interceptPaths": []
+    }
   ]
 }
 ```
 
 字段说明：
 
-- `listenPort`：本代理监听端口
-- `targetBaseUrl`：Mockoon CLI 服务地址（协议+主机+端口）
+- `listenPort`：代理监听端口
 - `requestTimeoutMs`：上游请求超时毫秒数
-- `interceptPaths`：需要做流式改写的路径数组（可多个）
+- `streamDelayMs`：拦截路径下，逐行输出的间隔毫秒数（0 表示无延迟）
+- `routes`：路由规则数组
+  - `targetBaseUrl`：该路由对应上游地址（协议+主机+端口）
+  - `matchPaths`：路径前缀匹配列表，命中该前缀时走这条路由（最长前缀优先）
+  - `interceptPaths`：该上游下需要转为 SSE 风格输出的完整路径列表
 
-> 兼容旧字段：若你已有 `interceptPath`（单个字符串），程序也会自动兼容。
+> 兼容旧配置：若未配置 `routes`，仍可使用单个 `targetBaseUrl + interceptPaths/interceptPath`。
+
+
+
+## 配置文件位置说明
+
+默认读取项目根目录 `config.json`（与当前工作目录无关）。
+
+可选：通过环境变量指定配置文件路径：
+
+```bash
+PROXY_CONFIG_PATH=/app/your-config.json npm start
+```
+
+## 一键启动/停止（推荐）
+
+```bash
+# 后台启动（默认）
+bash start.sh
+
+# 停止
+bash scripts/stop.sh
+```
+
+`start.sh` 默认就是后台启动（nohup + &），关闭当前终端后进程仍会继续运行。
 
 ## 启动方式
+
+前台运行：
 
 ```bash
 npm start
 ```
 
-## 请求链路示意
+后台常驻（关闭终端不退出）：
 
-客户端 -> 本代理(`listenPort`) -> Mockoon CLI(`targetBaseUrl` + 原始 path/query)
-
-- path 在 `interceptPaths`：返回 SSE 风格流式
-- path 不在 `interceptPaths`：原样透传
-
-## 流式处理逻辑（仅拦截路径生效）
-
-上游返回示例：
-
-```text
-data: {...}
-
-data: {...}
-
-data: [DONE]
+```bash
+npm run start:daemon
+# 或
+bash start.sh
 ```
 
-本代理会：
+停止后台进程：
 
-- 按 `\n` 或 `\r\n` 分行解析
-- 忽略空行
-- 每行即时写回（补 `\n\n`），保证客户端持续收到分批响应
+```bash
+npm run stop:daemon
+# 或
+bash scripts/stop.sh
+```
 
-## 内网离线部署建议
+日志文件：
 
-如果内网无法联网安装依赖：
+- `logs/proxy.out.log`：标准输出和错误输出
+- `logs/proxy.pid`：进程 PID
 
-本项目**无第三方依赖**，只使用 Node.js 内置模块，因此离线部署非常简单。
+## 如何确认浏览器端“真流式”
 
-### 方案 A：直接拷贝源码（推荐）
+1. 请求路径必须在命中路由的 `interceptPaths` 中。
+2. 响应头会被设置为：
+   - `content-type: text/event-stream`
+   - `cache-control: no-cache, no-transform`
+   - `x-accel-buffering: no`
+3. 建议用下面命令验证是否分段到达：
 
-1. 在外网准备目录，包含以下文件：
-   - `package.json`
-   - `config.json`
-   - `src/index.js`
-   - `README.md`
-2. 将整个目录打包：
-   ```bash
-   tar -czf mockoon-cli-proxy.tar.gz Mockoon-cli-proxy/
-   ```
-3. 拷贝到内网并解压：
-   ```bash
-   tar -xzf mockoon-cli-proxy.tar.gz
-   cd Mockoon-cli-proxy
-   ```
-4. 修改 `config.json` 为内网实际地址。
-5. 直接启动（无需 `npm install`）：
-   ```bash
-   npm start
-   ```
+```bash
+curl -N http://127.0.0.1:8080/v1/chat/completions
+```
 
-
+如果输出是按行逐步出现（且有间隔），说明代理端确实是流式输出。
