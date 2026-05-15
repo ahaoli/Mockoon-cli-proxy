@@ -22,6 +22,19 @@ function normalizePathList(paths) {
     .filter(Boolean)));
 }
 
+function normalizePath(value) {
+  if (typeof value !== 'string') return null;
+  const trimmed = value.trim();
+  if (!trimmed) return null;
+  return trimmed.startsWith('/') ? trimmed : `/${trimmed}`;
+}
+
+function normalizePathList(paths) {
+  return Array.from(new Set((Array.isArray(paths) ? paths : [])
+    .map(normalizePath)
+    .filter(Boolean)));
+}
+
 function loadConfig() {
   if (!fs.existsSync(CONFIG_PATH)) {
     throw new Error(`Missing config file: ${CONFIG_PATH}`);
@@ -134,6 +147,7 @@ function pipeRequestToUpstream(req, res, { forceSse, route }) {
 
     const transport = targetUrl.protocol === 'https:' ? https : http;
     const upstreamReq = transport.request(requestOptions, (upstreamRes) => {
+      console.log(`[mockoon-cli-proxy] upstream response: ${req.method} ${reqPath} -> ${targetUrl.origin}${requestOptions.path} status=${upstreamRes.statusCode || 0} mode=${forceSse ? 'sse' : 'passthrough'}`);
       if (forceSse) {
         res.socket?.setNoDelay(true);
         res.writeHead(upstreamRes.statusCode || 200, {
@@ -150,7 +164,7 @@ function pipeRequestToUpstream(req, res, { forceSse, route }) {
       let buffer = '';
       upstreamRes.setEncoding('utf8');
 
-      upstreamRes.on('data', (chunk) => {
+      upstreamRes.on('data', async (chunk) => {
         if (!forceSse) {
           res.write(chunk);
           return;

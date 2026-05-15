@@ -63,6 +63,8 @@
 
 可选：通过环境变量指定配置文件路径：
 
+前台运行：
+
 ```bash
 PROXY_CONFIG_PATH=/app/your-config.json npm start
 ```
