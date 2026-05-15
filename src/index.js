@@ -4,7 +4,23 @@ const http = require('http');
 const https = require('https');
 const { URL } = require('url');
 
-const CONFIG_PATH = path.resolve(process.cwd(), 'config.json');
+const PROJECT_ROOT = path.resolve(__dirname, '..');
+const CONFIG_PATH = process.env.PROXY_CONFIG_PATH
+  ? path.resolve(process.env.PROXY_CONFIG_PATH)
+  : path.join(PROJECT_ROOT, 'config.json');
+
+function normalizePath(value) {
+  if (typeof value !== 'string') return null;
+  const trimmed = value.trim();
+  if (!trimmed) return null;
+  return trimmed.startsWith('/') ? trimmed : `/${trimmed}`;
+}
+
+function normalizePathList(paths) {
+  return Array.from(new Set((Array.isArray(paths) ? paths : [])
+    .map(normalizePath)
+    .filter(Boolean)));
+}
 
 function normalizePath(value) {
   if (typeof value !== 'string') return null;
@@ -98,7 +114,7 @@ function pickRoute(reqPath) {
   return matchedRoutes[0] || config.defaultRoute;
 }
 
-function pipeRequestToUpstream(req, res, { forceSse, route, reqPath }) {
+function pipeRequestToUpstream(req, res, { forceSse, route }) {
   const bodyChunks = [];
 
   req.on('data', (chunk) => bodyChunks.push(chunk));
@@ -155,15 +171,6 @@ function pipeRequestToUpstream(req, res, { forceSse, route, reqPath }) {
         }
 
         buffer += chunk;
-        const lines = buffer.split(/\r?\n/);
-        buffer = lines.pop() || '';
-
-        for (const line of lines) {
-          writeSseLine(res, line);
-          if (config.streamDelayMs > 0) {
-            await sleep(config.streamDelayMs);
-          }
-        }
       });
 
       upstreamRes.on('end', async () => {
@@ -172,8 +179,9 @@ function pipeRequestToUpstream(req, res, { forceSse, route, reqPath }) {
           return;
         }
 
-        if (buffer.trim()) {
-          writeSseLine(res, buffer);
+        const lines = buffer.split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
+        for (const line of lines) {
+          writeSseLine(res, line);
           if (config.streamDelayMs > 0) {
             await sleep(config.streamDelayMs);
           }
@@ -215,13 +223,7 @@ const server = http.createServer((req, res) => {
   const route = pickRoute(reqPath);
   const shouldIntercept = route.interceptPaths.includes(reqPath);
 
-  console.log(`[mockoon-cli-proxy] incoming request: ${req.method} ${req.url} path=${reqPath} target=${route.targetBaseUrl} mode=${shouldIntercept ? 'sse' : 'passthrough'}`);
-
-  res.on('finish', () => {
-    console.log(`[mockoon-cli-proxy] response finished: ${req.method} ${reqPath} status=${res.statusCode} mode=${shouldIntercept ? 'sse' : 'passthrough'}`);
-  });
-
-  pipeRequestToUpstream(req, res, { forceSse: shouldIntercept, route, reqPath });
+  pipeRequestToUpstream(req, res, { forceSse: shouldIntercept, route });
 });
 
 server.listen(config.listenPort, () => {

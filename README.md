@@ -55,6 +55,32 @@
 
 > 兼容旧配置：若未配置 `routes`，仍可使用单个 `targetBaseUrl + interceptPaths/interceptPath`。
 
+
+
+## 配置文件位置说明
+
+默认读取项目根目录 `config.json`（与当前工作目录无关）。
+
+可选：通过环境变量指定配置文件路径：
+
+前台运行：
+
+```bash
+PROXY_CONFIG_PATH=/app/your-config.json npm start
+```
+
+## 一键启动/停止（推荐）
+
+```bash
+# 后台启动（默认）
+bash start.sh
+
+# 停止
+bash scripts/stop.sh
+```
+
+`start.sh` 默认就是后台启动（nohup + &），关闭当前终端后进程仍会继续运行。
+
 ## 启动方式
 
 前台运行：
@@ -68,7 +94,7 @@ npm start
 ```bash
 npm run start:daemon
 # 或
-bash scripts/start.sh
+bash start.sh
 ```
 
 停止后台进程：

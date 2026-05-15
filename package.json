@@ -9,7 +9,7 @@
   },
   "scripts": {
     "start": "node src/index.js",
-    "start:daemon": "bash scripts/start.sh",
+    "start:daemon": "bash start.sh",
     "stop:daemon": "bash scripts/stop.sh",
     "status:daemon": "if [ -f logs/proxy.pid ] && kill -0 $(cat logs/proxy.pid) 2>/dev/null; then echo \"running pid $(cat logs/proxy.pid)\"; else echo \"not running\"; fi",
     "test": "node --check src/index.js"
