@@ -162,6 +162,7 @@ function pipeRequestToUpstream(req, res, { forceSse, route }) {
       }
 
       let buffer = '';
+      let sseWriteChain = Promise.resolve();
       upstreamRes.setEncoding('utf8');
 
       upstreamRes.on('data', async (chunk) => {
@@ -171,6 +172,17 @@ function pipeRequestToUpstream(req, res, { forceSse, route }) {
         }
 
         buffer += chunk;
+        const lines = buffer.split(/\r?\n/);
+        buffer = lines.pop() || '';
+
+        sseWriteChain = sseWriteChain.then(async () => {
+          for (const line of lines) {
+            writeSseLine(res, line);
+            if (config.streamDelayMs > 0) {
+              await sleep(config.streamDelayMs);
+            }
+          }
+        });
       });
 
       upstreamRes.on('end', async () => {
@@ -179,9 +191,10 @@ function pipeRequestToUpstream(req, res, { forceSse, route }) {
           return;
         }
 
-        const lines = buffer.split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
-        for (const line of lines) {
-          writeSseLine(res, line);
+        await sseWriteChain;
+
+        if (buffer.trim()) {
+          writeSseLine(res, buffer);
           if (config.streamDelayMs > 0) {
             await sleep(config.streamDelayMs);
           }
