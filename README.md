@@ -109,18 +109,3 @@ bash scripts/stop.sh
 
 - `logs/proxy.out.log`：标准输出和错误输出
 - `logs/proxy.pid`：进程 PID
-
-## 如何确认浏览器端“真流式”
-
-1. 请求路径必须在命中路由的 `interceptPaths` 中。
-2. 响应头会被设置为：
-   - `content-type: text/event-stream`
-   - `cache-control: no-cache, no-transform`
-   - `x-accel-buffering: no`
-3. 建议用下面命令验证是否分段到达：
-
-```bash
-curl -N http://127.0.0.1:8080/v1/chat/completions
-```
-
-如果输出是按行逐步出现（且有间隔），说明代理端确实是流式输出。
