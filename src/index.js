@@ -149,7 +149,7 @@ function pipeRequestToUpstream(req, res, { forceSse, route, reqPath }) {
       let sseWriteChain = Promise.resolve();
       upstreamRes.setEncoding('utf8');
 
-      upstreamRes.on('data', (chunk) => {
+      upstreamRes.on('data', async (chunk) => {
         if (!forceSse) {
           res.write(chunk);
           return;
