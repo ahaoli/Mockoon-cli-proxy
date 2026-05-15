@@ -114,7 +114,7 @@ function pickRoute(reqPath) {
   return matchedRoutes[0] || config.defaultRoute;
 }
 
-function pipeRequestToUpstream(req, res, { forceSse, route }) {
+function pipeRequestToUpstream(req, res, reqPath, { forceSse, route }) {
   const bodyChunks = [];
 
   req.on('data', (chunk) => bodyChunks.push(chunk));
@@ -236,7 +236,7 @@ const server = http.createServer((req, res) => {
   const route = pickRoute(reqPath);
   const shouldIntercept = route.interceptPaths.includes(reqPath);
 
-  pipeRequestToUpstream(req, res, { forceSse: shouldIntercept, route });
+  pipeRequestToUpstream(req, res, reqPath, { forceSse: shouldIntercept, route });
 });
 
 server.listen(config.listenPort, () => {
